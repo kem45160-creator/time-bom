@@ -103,7 +103,7 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
     <div class="logo">SA</div>
     <div>
       <h1>BOM &#9201; ไม่มีเวลา vs Production Order</h1>
-      <p>SAHA Autopart Industry &middot; ตัด OS/QA ออก &middot; จับคู่ด้วย Inventory ID</p>
+      <p>SAHA Autopart Industry &middot; ตัด OS/QA &middot; จับคู่ Inventory ID</p>
     </div>
   </div>
   <div class="hd-badge" id="badge">&#9888; ยังไม่ได้โหลดไฟล์</div>
@@ -211,28 +211,84 @@ var SEED_PREFIXES=["FGPDAU", "FGPDGL", "SMPDGL", "SVGLTM"];
 var ROWS=[],filtered=[],curTab=1,sortKey="",sortDir=1,curPage=1,PG=30;
 var fBom=null,fProd=null;
 
-// ── column names จากไฟล์จริง (hardcode ตรงตัว) ──
-var BOM_COLS = {
-  bomId:    "1 - BOM ID",
-  bomDesc:  "3 - BOM Description",
-  invId:    "4 - Inventory ID",
-  opId:     "8 - Operation ID",
-  wc:       "9 - Work Center",
-  opDesc:   "10 - Oper Desc",
-  machTime: "12 - Machine Time"
-};
-var PROD_COLS = {
-  prodNbr:  "Production Nbr.",
-  invId:    "Inventory ID",
-  desc:     "Order Description",
-  status:   "Status",
-  endDate:  "End Date",
-  customer: "Customer Name"
-};
+// ─── fix sheet ที่มี lowercase cell keys และ !ref ผิดรูปแบบ ───
+// สาเหตุ: Production Order file export จาก Acumatica มี cell ref เป็น lowercase
+function fixSheet(ws){
+  var out={};
+  var keys=Object.keys(ws);
+  for(var i=0;i<keys.length;i++){
+    var k=keys[i];
+    if(k.charAt(0)==="!")out[k]=ws[k];
+    else out[k.toUpperCase()]=ws[k];
+  }
+  // rebuild !ref จาก actual cell keys
+  var cellKeys=Object.keys(out).filter(function(k){return k.charAt(0)!=="!";});
+  var minC=9999,maxC=-1,minR=9999,maxR=-1;
+  for(var i=0;i<cellKeys.length;i++){
+    try{
+      var c=XLSX.utils.decode_cell(cellKeys[i]);
+      if(c.c>=0&&c.r>=0){
+        if(c.c<minC)minC=c.c;if(c.c>maxC)maxC=c.c;
+        if(c.r<minR)minR=c.r;if(c.r>maxR)maxR=c.r;
+      }
+    }catch(e){}
+  }
+  if(maxC>=0)out["!ref"]=XLSX.utils.encode_cell({c:minC,r:minR})+":"+XLSX.utils.encode_cell({c:maxC,r:maxR});
+  return out;
+}
+
+// ─── อ่านไฟล์ด้วย FileReader ───
+function readXLSX(file,fixLower){
+  return new Promise(function(res,rej){
+    var reader=new FileReader();
+    reader.onload=function(e){
+      try{
+        var data=new Uint8Array(e.target.result);
+        var wb=XLSX.read(data,{type:"array",cellDates:false,raw:false});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        if(fixLower)ws=fixSheet(ws);
+        var rows=XLSX.utils.sheet_to_json(ws,{defval:"",raw:false});
+        res(rows);
+      }catch(err){rej(err);}
+    };
+    reader.onerror=function(){rej(new Error("อ่านไฟล์ไม่สำเร็จ"));};
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// ─── Machine Time zero: SheetJS raw:false ให้ "0:00" หรือ "00:00:00" ───
+function isZeroTime(v){
+  if(v===null||v===undefined||v==="")return true;
+  var s=String(v).trim();
+  return s===""||s==="0:00"||s==="00:00"||s==="00:00:00"||s==="0:00:00"||
+         s==="12:00:00 AM"||s==="12:00 AM";
+}
+
+// ─── Date format: SheetJS raw:false ให้ "DD/MM/YY" เช่น "18/06/26" ───
+function toIso(v){
+  if(!v)return "";
+  var s=String(v).trim();if(!s)return "";
+  // DD/MM/YY (SheetJS format สำหรับไฟล์นี้)
+  var m1=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if(m1)return "20"+m1[3]+"-"+m1[2].padStart(2,"0")+"-"+m1[1].padStart(2,"0");
+  // DD/MM/YYYY
+  var m2=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(m2)return m2[3]+"-"+m2[2].padStart(2,"0")+"-"+m2[1].padStart(2,"0");
+  // M/D/YY or M/D/YYYY (US format)
+  var m3=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(m3){var y=m3[3].length===2?"20"+m3[3]:m3[3];return y+"-"+m3[1].padStart(2,"0")+"-"+m3[2].padStart(2,"0");}
+  // YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}/.test(s))return s.substring(0,10);
+  return "";
+}
+function fmtD(iso){
+  if(!iso)return "-";
+  var p=iso.split("-");
+  return p.length===3?p[2]+"/"+p[1]+"/"+p[0]:iso;
+}
 
 function showToast(msg,ms){
-  ms=ms||6000;
-  var t=document.getElementById("toast");
+  ms=ms||6000;var t=document.getElementById("toast");
   t.textContent=msg;t.classList.add("open");
   setTimeout(function(){t.classList.remove("open");},ms);
 }
@@ -256,70 +312,11 @@ function doReset(){
   ["sl1","sl2"].forEach(function(id){document.getElementById(id).classList.remove("ok");});
   document.getElementById("sb1").textContent="คลิกหรือลากไฟล์ BOM .xlsx";
   document.getElementById("sb2").textContent="คลิกหรือลากไฟล์ Production .xlsx";
-  document.getElementById("fi1").value="";
-  document.getElementById("fi2").value="";
+  document.getElementById("fi1").value="";document.getElementById("fi2").value="";
   document.getElementById("btnGo").disabled=true;
   document.getElementById("badge").className="hd-badge";
   document.getElementById("badge").textContent="ยังไม่ได้โหลดไฟล์";
   disF();resetCards();renderSkel();
-}
-
-// ── อ่านไฟล์ด้วย FileReader (ไม่ใช้ arrayBuffer เพื่อ compatibility) ──
-function readXLSX(file){
-  return new Promise(function(res,rej){
-    var reader=new FileReader();
-    reader.onload=function(e){
-      try{
-        var data=new Uint8Array(e.target.result);
-        var wb=XLSX.read(data,{type:"array",cellDates:false,raw:true});
-        var ws=wb.Sheets[wb.SheetNames[0]];
-        // raw:false เพื่อให้ SheetJS แปลง date/time เป็น string อัตโนมัติ
-        var rows=XLSX.utils.sheet_to_json(ws,{defval:"",raw:false});
-        res(rows);
-      }catch(err){rej(err);}
-    };
-    reader.onerror=function(){rej(new Error("อ่านไฟล์ไม่สำเร็จ"));};
-    reader.readAsArrayBuffer(file);
-  });
-}
-
-// ── ตรวจ Machine Time = 0 (raw:false จะได้ string "00:00:00" หรือ "0") ──
-function isZeroTime(v){
-  if(v===null||v===undefined||v==="")return true;
-  var s=String(v).trim();
-  if(s==="")return true;
-  // raw:false: time cell -> "HH:MM:SS" format
-  if(s==="00:00:00"||s==="00:00"||s==="0:00:00"||s==="0:00")return true;
-  // บางครั้งอาจได้ "12:00:00 AM" (12-hour format)
-  if(s==="12:00:00 AM"||s==="12:00 AM")return true;
-  return false;
-}
-
-// ── แปลง date string -> ISO (raw:false ให้ string เช่น "2026-06-18") ──
-function toIso(v){
-  if(!v)return "";
-  var s=String(v).trim();if(!s)return "";
-  // raw:false date -> "M/D/YY" หรือ "YYYY-MM-DD" หรือ "DD/MM/YYYY"
-  // SheetJS มักให้ "6/18/2026" (US format)
-  var m1=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if(m1)return m1[3]+"-"+m1[2].padStart(2,"0")+"-"+m1[1].padStart(2,"0");
-  // YYYY-MM-DD
-  var m2=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if(m2)return s.substring(0,10);
-  // numeric serial (fallback)
-  var n=parseFloat(s);
-  if(!isNaN(n)&&n>10000){
-    try{
-      var dd=XLSX.SSF.parse_date_code(n);
-      if(dd)return dd.y+"-"+String(dd.m).padStart(2,"0")+"-"+String(dd.d).padStart(2,"0");
-    }catch(x){}
-  }
-  return "";
-}
-function fmtD(iso){
-  if(!iso)return "-";
-  var p=iso.split("-");
-  return p.length===3?p[2]+"/"+p[1]+"/"+p[0]:iso;
 }
 
 async function analyze(){
@@ -327,99 +324,81 @@ async function analyze(){
   document.getElementById("ovMsg").textContent="กำลังอ่านไฟล์ BOM...";
   await new Promise(function(r){setTimeout(r,40);});
   try{
-    var bomRaw=await readXLSX(fBom);
+    // BOM: ไม่ต้อง fix (cell keys ปกติ)
+    var bomRaw=await readXLSX(fBom,false);
     document.getElementById("ovMsg").textContent="กำลังอ่านไฟล์ Production...";
     await new Promise(function(r){setTimeout(r,40);});
-    var prodRaw=await readXLSX(fProd);
+    // Production: ต้อง fix lowercase cell keys
+    var prodRaw=await readXLSX(fProd,true);
     document.getElementById("ovMsg").textContent="กำลังวิเคราะห์...";
     await new Promise(function(r){setTimeout(r,40);});
 
-    if(!bomRaw.length)throw new Error("ไม่พบข้อมูลใน BOM file");
-    if(!prodRaw.length)throw new Error("ไม่พบข้อมูลใน Production file");
+    if(!bomRaw.length)throw new Error("BOM file ไม่มีข้อมูล");
+    if(!prodRaw.length)throw new Error("Production file ไม่มีข้อมูล");
 
-    // ตรวจว่า column ที่ต้องการมีจริงไหม
+    // column names จากไฟล์จริง
+    var BC={id:"1 - BOM ID",desc:"3 - BOM Description",inv:"4 - Inventory ID",
+            op:"8 - Operation ID",wc:"9 - Work Center",od:"10 - Oper Desc",tm:"12 - Machine Time"};
+    var PC={nbr:"Production Nbr.",inv:"Inventory ID",desc:"Order Description",
+            st:"Status",ed:"End Date",cu:"Customer Name"};
+
+    // ตรวจ column
     var bk=Object.keys(bomRaw[0]);
     var pk=Object.keys(prodRaw[0]);
-
-    Object.keys(BOM_COLS).forEach(function(k){
-      if(bk.indexOf(BOM_COLS[k])<0)
-        throw new Error("BOM: ไม่พบ column \""+BOM_COLS[k]+"\"\nColumn ที่พบ: "+bk.slice(0,6).join(", "));
+    Object.keys(BC).forEach(function(k){
+      if(bk.indexOf(BC[k])<0)throw new Error("BOM: ไม่พบ column \""+BC[k]+"\"\nพบ: "+bk.slice(0,5).join(", "));
     });
-    ["prodNbr","invId","status","endDate"].forEach(function(k){
-      if(pk.indexOf(PROD_COLS[k])<0)
-        throw new Error("Production: ไม่พบ column \""+PROD_COLS[k]+"\"\nColumn ที่พบ: "+pk.slice(0,6).join(", "));
+    ["nbr","inv","st","ed"].forEach(function(k){
+      if(pk.indexOf(PC[k])<0)throw new Error("Production: ไม่พบ column \""+PC[k]+"\"\nพบ: "+pk.slice(0,5).join(", "));
     });
 
     var EXCL=["OS","QA"];
     var bomFilt=bomRaw.filter(function(r){
-      var wc=String(r[BOM_COLS.wc]||"").trim();
-      return EXCL.indexOf(wc)<0 && isZeroTime(r[BOM_COLS.machTime]);
+      return EXCL.indexOf(String(r[BC.wc]||"").trim())<0 && isZeroTime(r[BC.tm]);
     });
+    if(!bomFilt.length)throw new Error("BOM: ไม่พบ row ที่ Machine Time = 0:00 (ยกเว้น OS/QA)");
 
-    if(!bomFilt.length)throw new Error("BOM: ไม่พบ row ที่ Machine Time = 00:00 (ยกเว้น OS/QA)");
-
-    // group by Inventory ID
     var byInv={};
     bomFilt.forEach(function(r){
-      var inv=String(r[BOM_COLS.invId]||"").trim();
-      if(!inv||inv==="undefined")return;
-      if(!byInv[inv])byInv[inv]={
-        bid:String(r[BOM_COLS.bomId]||"").trim(),
-        bdesc:String(r[BOM_COLS.bomDesc]||"").trim(),
-        ops:[]
-      };
-      byInv[inv].ops.push({
-        op:String(r[BOM_COLS.opId]||"").trim(),
-        wc:String(r[BOM_COLS.wc]||"").trim(),
-        desc:String(r[BOM_COLS.opDesc]||"").trim()
-      });
+      var inv=String(r[BC.inv]||"").trim();if(!inv||inv==="undefined")return;
+      if(!byInv[inv])byInv[inv]={bid:String(r[BC.id]||"").trim(),bdesc:String(r[BC.desc]||"").trim(),ops:[]};
+      byInv[inv].ops.push({op:String(r[BC.op]||"").trim(),wc:String(r[BC.wc]||"").trim(),desc:String(r[BC.od]||"").trim()});
     });
 
     var prodIdx={};
     prodRaw.forEach(function(r){
-      var inv=String(r[PROD_COLS.invId]||"").trim();if(!inv)return;
+      var inv=String(r[PC.inv]||"").trim();if(!inv)return;
       if(!prodIdx[inv])prodIdx[inv]=[];
       prodIdx[inv].push(r);
     });
 
     var rows=[];
     Object.keys(byInv).forEach(function(inv){
-      var b=byInv[inv];
-      var ps=prodIdx[inv]||[];
-      var wcs=[];
-      b.ops.forEach(function(o){if(wcs.indexOf(o.wc)<0)wcs.push(o.wc);});
+      var b=byInv[inv],ps=prodIdx[inv]||[];
+      var wcs=[];b.ops.forEach(function(o){if(wcs.indexOf(o.wc)<0)wcs.push(o.wc);});
       if(ps.length){
         ps.forEach(function(p){
-          var iso=toIso(p[PROD_COLS.endDate]);
-          rows.push({
-            inv_id:inv,bom_id:b.bid,bom_desc:b.bdesc,
-            prod_nbr:String(p[PROD_COLS.prodNbr]||"").trim(),
-            prod_desc:String(p[PROD_COLS.desc]||"").trim(),
-            status:String(p[PROD_COLS.status]||"").trim(),
-            end_date:iso,ef:fmtD(iso),
-            customer:String(p[PROD_COLS.customer]||"").trim(),
-            ops:b.ops,wcs:wcs,matched:true
-          });
+          var iso=toIso(p[PC.ed]);
+          rows.push({inv_id:inv,bom_id:b.bid,bom_desc:b.bdesc,
+            prod_nbr:String(p[PC.nbr]||"").trim(),prod_desc:String(p[PC.desc]||"").trim(),
+            status:String(p[PC.st]||"").trim(),end_date:iso,ef:fmtD(iso),
+            customer:String(p[PC.cu]||"").trim(),ops:b.ops,wcs:wcs,matched:true});
         });
       }else{
-        rows.push({
-          inv_id:inv,bom_id:b.bid,bom_desc:b.bdesc,
+        rows.push({inv_id:inv,bom_id:b.bid,bom_desc:b.bdesc,
           prod_nbr:"",prod_desc:"",status:"",end_date:"",ef:"",
-          customer:"",ops:b.ops,wcs:wcs,matched:false
-        });
+          customer:"",ops:b.ops,wcs:wcs,matched:false});
       }
     });
 
-    if(!rows.length)throw new Error("ไม่พบข้อมูลหลังวิเคราะห์");
-    ROWS=rows;
-    buildOpts();updCards();enF();
+    if(!rows.length)throw new Error("ไม่พบข้อมูลหลังวิเคราะห์\nตรวจสอบว่าไม่สลับไฟล์");
+    ROWS=rows;buildOpts();updCards();enF();
     document.getElementById("badge").className="hd-badge ok";
     document.getElementById("badge").textContent="โหลดแล้ว "+new Date().toLocaleDateString("th-TH");
-    ov.classList.remove("open");
-    applyF();
+    ov.classList.remove("open");applyF();
   }catch(err){
     ov.classList.remove("open");
-    showToast("Error: "+err.message,8000);
+    showToast("&#10060; "+err.message,8000);
   }
 }
 
@@ -433,86 +412,59 @@ function buildOpts(){
   });
   wcs.sort();custs.sort();boms.sort();pfx.sort();
   function fill(id,opts){
-    var el=document.getElementById(id);
-    var f=el.options[0].outerHTML;
+    var el=document.getElementById(id),f=el.options[0].outerHTML;
     el.innerHTML=f+opts.map(function(v){return"<option value=\""+v+"\">"+v+"</option>";}).join("");
   }
   fill("f1w",wcs);fill("f2w",wcs);fill("f1c",custs);fill("f2b",boms);fill("f2p",pfx);
 }
 function updCards(){
   function sv(id,v){document.getElementById(id).textContent=v;}
-  var invSet=new Set(ROWS.map(function(r){return r.inv_id;}));
-  var mSet=new Set(ROWS.filter(function(r){return r.matched;}).map(function(r){return r.inv_id;}));
-  var uSet=new Set(ROWS.filter(function(r){return!r.matched;}).map(function(r){return r.inv_id;}));
-  sv("sv1",invSet.size);sv("sv2",mSet.size);sv("sv3",uSet.size);
+  sv("sv1",new Set(ROWS.map(function(r){return r.inv_id;})).size);
+  sv("sv2",new Set(ROWS.filter(function(r){return r.matched;}).map(function(r){return r.inv_id;})).size);
+  sv("sv3",new Set(ROWS.filter(function(r){return!r.matched;}).map(function(r){return r.inv_id;})).size);
   sv("sv4",ROWS.filter(function(r){return r.status==="In Process";}).length);
   sv("sv5",ROWS.filter(function(r){return r.status==="Released";}).length);
   var mr=ROWS.filter(function(r){return r.matched;}).length;
-  sv("sv6",mr);
-  document.getElementById("cnt1").textContent=mr;
-  document.getElementById("cnt2").textContent=ROWS.length;
+  sv("sv6",mr);document.getElementById("cnt1").textContent=mr;document.getElementById("cnt2").textContent=ROWS.length;
 }
 function resetCards(){
-  ["sv1","sv2","sv3","sv4","sv5","sv6"].forEach(function(id){
-    document.getElementById(id).innerHTML="<span class=\"sk sk-val\"></span>";
-  });
-  document.getElementById("cnt1").textContent="-";
-  document.getElementById("cnt2").textContent="-";
+  ["sv1","sv2","sv3","sv4","sv5","sv6"].forEach(function(id){document.getElementById(id).innerHTML="<span class=\"sk sk-val\"></span>";});
+  document.getElementById("cnt1").textContent="-";document.getElementById("cnt2").textContent="-";
 }
 function enF(){["f1s","f1w","f1c","f1df","f1dt","f2w","f2b","f2p","f2m"].forEach(function(id){var e=document.getElementById(id);if(e)e.disabled=false;});}
 function disF(){["f1s","f1w","f1c","f1df","f1dt","f2w","f2b","f2p","f2m"].forEach(function(id){var e=document.getElementById(id);if(e)e.disabled=true;});}
-
 function setTab(t){
-  curTab=t;
-  [1,2].forEach(function(n){
+  curTab=t;[1,2].forEach(function(n){
     document.getElementById("tab"+n).classList.toggle("active",n===t);
     document.getElementById("fb"+n).style.display=n===t?"flex":"none";
     document.getElementById("th"+n).style.display=n===t?"":"none";
   });
-  sortKey="";sortDir=1;curPage=1;
-  ROWS.length?applyF():renderSkel();
+  sortKey="";sortDir=1;curPage=1;ROWS.length?applyF():renderSkel();
 }
 function applyF(){
   if(!ROWS.length){renderSkel();return;}
   var base=curTab===1?ROWS.filter(function(r){return r.matched;}):ROWS;
   if(curTab===1){
-    var q=(document.getElementById("q1").value||"").toLowerCase();
-    var st=document.getElementById("f1s").value;
-    var wc=document.getElementById("f1w").value;
-    var cu=document.getElementById("f1c").value;
-    var df=document.getElementById("f1df").value;
-    var dt=document.getElementById("f1dt").value;
+    var q=(document.getElementById("q1").value||"").toLowerCase(),st=document.getElementById("f1s").value,
+        wc=document.getElementById("f1w").value,cu=document.getElementById("f1c").value,
+        df=document.getElementById("f1df").value,dt=document.getElementById("f1dt").value;
     base=base.filter(function(r){
       if(q&&![r.inv_id,r.bom_id,r.prod_nbr,r.customer,r.bom_desc,r.prod_desc].some(function(v){return v.toLowerCase().indexOf(q)>=0;}))return false;
-      if(st&&r.status!==st)return false;
-      if(wc&&r.wcs.indexOf(wc)<0)return false;
-      if(cu&&r.customer!==cu)return false;
-      if(df&&r.end_date&&r.end_date<df)return false;
-      if(dt&&r.end_date&&r.end_date>dt)return false;
-      return true;
+      if(st&&r.status!==st)return false;if(wc&&r.wcs.indexOf(wc)<0)return false;
+      if(cu&&r.customer!==cu)return false;if(df&&r.end_date&&r.end_date<df)return false;
+      if(dt&&r.end_date&&r.end_date>dt)return false;return true;
     });
   }else{
-    var q2=(document.getElementById("q2").value||"").toLowerCase();
-    var wc2=document.getElementById("f2w").value;
-    var bi=document.getElementById("f2b").value;
-    var px=document.getElementById("f2p").value;
-    var mt=document.getElementById("f2m").value;
+    var q2=(document.getElementById("q2").value||"").toLowerCase(),wc2=document.getElementById("f2w").value,
+        bi=document.getElementById("f2b").value,px=document.getElementById("f2p").value,mt=document.getElementById("f2m").value;
     base=base.filter(function(r){
       if(q2&&![r.inv_id,r.bom_id,r.bom_desc].some(function(v){return v.toLowerCase().indexOf(q2)>=0;}))return false;
-      if(wc2&&r.wcs.indexOf(wc2)<0)return false;
-      if(bi&&r.bom_id!==bi)return false;
-      if(px&&r.inv_id.indexOf(px)!==0)return false;
-      if(mt==="1"&&!r.matched)return false;
-      if(mt==="0"&&r.matched)return false;
-      return true;
+      if(wc2&&r.wcs.indexOf(wc2)<0)return false;if(bi&&r.bom_id!==bi)return false;
+      if(px&&r.inv_id.indexOf(px)!==0)return false;if(mt==="1"&&!r.matched)return false;
+      if(mt==="0"&&r.matched)return false;return true;
     });
   }
-  if(sortKey){
-    base=base.slice().sort(function(a,b){
-      var av=a[sortKey]||"",bv=b[sortKey]||"";
-      return av<bv?-sortDir:av>bv?sortDir:0;
-    });
-  }
+  if(sortKey){base=base.slice().sort(function(a,b){var av=a[sortKey]||"",bv=b[sortKey]||"";return av<bv?-sortDir:av>bv?sortDir:0;});}
   filtered=base;curPage=1;render();
 }
 function clrF(t){
@@ -524,56 +476,23 @@ function srt(k){if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=1;}applyF();}
 function wcc(wcs){return wcs.map(function(w){return"<span class=\"wc\">"+w+"</span>";}).join("");}
 function stB(s){
   if(s==="In Process")return"<span class=\"badge b-blue\">In Process</span>";
-  if(s==="Released")return"<span class=\"badge b-gray\">Released</span>";
-  return"-";
+  if(s==="Released")return"<span class=\"badge b-gray\">Released</span>";return"-";
 }
 function renderSkel(){
   var cols=curTab===1?9:8,ws=[36,90,80,190,100,70,80,150,100],h="";
-  for(var i=0;i<10;i++){
-    h+="<tr class=\"sk-row\">";
-    for(var j=0;j<cols;j++){var w=ws[j]||80;h+="<td><span class=\"sk sk-cell\" style=\"width:"+Math.round(w*.4+Math.random()*w*.45)+"px\">&nbsp;</span></td>";}
-    h+="</tr>";
-  }
-  document.getElementById("tbody").innerHTML=h;
-  document.getElementById("pager").innerHTML="";
+  for(var i=0;i<10;i++){h+="<tr class=\"sk-row\">";for(var j=0;j<cols;j++){var w=ws[j]||80;h+="<td><span class=\"sk sk-cell\" style=\"width:"+Math.round(w*.4+Math.random()*w*.45)+"px\">&nbsp;</span></td>";}h+="</tr>";}
+  document.getElementById("tbody").innerHTML=h;document.getElementById("pager").innerHTML="";
 }
 function render(){
   var s=(curPage-1)*PG,page=filtered.slice(s,s+PG),tb=document.getElementById("tbody"),cols=curTab===1?9:8;
-  if(!page.length){tb.innerHTML="<tr><td colspan=\""+cols+"\" class=\"no-data\">ไม่พบข้อมูลที่ตรงกับเงื่อนไข</td></tr>";document.getElementById("pager").innerHTML="";return;}
+  if(!page.length){tb.innerHTML="<tr><td colspan=\""+cols+"\" class=\"no-data\">ไม่พบข้อมูล</td></tr>";document.getElementById("pager").innerHTML="";return;}
   var h="";
-  if(curTab===1){
-    page.forEach(function(r,i){
-      h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"
-        +"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"
-        +"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"
-        +"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"
-        +"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"
-        +"<td style=\"font-weight:600;font-size:12px;white-space:nowrap\">"+r.prod_nbr+"</td>"
-        +"<td>"+stB(r.status)+"</td>"
-        +"<td style=\"font-size:12px;white-space:nowrap\">"+r.ef+"</td>"
-        +"<td style=\"font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\""+r.customer+"\">"+(r.customer||"-")+"</td>"
-        +"<td>"+wcc(r.wcs)+"</td>"
-        +"</tr>";
-    });
-  }else{
-    page.forEach(function(r,i){
-      h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"
-        +"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"
-        +"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"
-        +"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"
-        +"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"
-        +"<td>"+wcc(r.wcs)+"</td>"
-        +"<td>"+(r.matched?"<span class=\"badge b-red\">มีใน Production</span>":"<span class=\"badge b-gray\">ยังไม่มี</span>")+"</td>"
-        +"<td style=\"font-size:12px\">"+(r.prod_nbr||"-")+"</td>"
-        +"<td>"+stB(r.status)+"</td>"
-        +"</tr>";
-    });
-  }
+  if(curTab===1){page.forEach(function(r,i){h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"+"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"+"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"+"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"+"<td style=\"font-weight:600;font-size:12px;white-space:nowrap\">"+r.prod_nbr+"</td>"+"<td>"+stB(r.status)+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.ef+"</td>"+"<td style=\"font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\""+r.customer+"\">"+(r.customer||"-")+"</td>"+"<td>"+wcc(r.wcs)+"</td>"+"</tr>";});}
+  else{page.forEach(function(r,i){h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"+"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"+"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"+"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"+"<td>"+wcc(r.wcs)+"</td>"+"<td>"+(r.matched?"<span class=\"badge b-red\">มีใน Production</span>":"<span class=\"badge b-gray\">ยังไม่มี</span>")+"</td>"+"<td style=\"font-size:12px\">"+(r.prod_nbr||"-")+"</td>"+"<td>"+stB(r.status)+"</td>"+"</tr>";});}
   tb.innerHTML=h;renderPager();
 }
 function renderPager(){
-  var tot=Math.ceil(filtered.length/PG),p=document.getElementById("pager");
-  if(tot<=1){p.innerHTML="";return;}
+  var tot=Math.ceil(filtered.length/PG),p=document.getElementById("pager");if(tot<=1){p.innerHTML="";return;}
   var h="<span class=\"pi\">แสดง "+(Math.min((curPage-1)*PG+1,filtered.length))+"-"+(Math.min(curPage*PG,filtered.length))+" จาก "+filtered.length+"</span>";
   if(curPage>1)h+="<button class=\"pb\" onclick=\"gp("+(curPage-1)+")\">&#8249;</button>";
   for(var i=Math.max(1,curPage-2);i<=Math.min(tot,curPage+2);i++)h+="<button class=\"pb "+(i===curPage?"active":"")+"\" onclick=\"gp("+i+")\">"+i+"</button>";
@@ -586,22 +505,9 @@ function showDet(idx){
   var ops=r.ops.map(function(o){return"<tr><td>"+o.op+"</td><td><span class=\"wc\">"+o.wc+"</span></td><td>"+o.desc+"</td></tr>";}).join("");
   document.getElementById("mTtl").textContent=r.inv_id+" - "+r.bom_id;
   var ph=r.matched
-    ?"<div class=\"ii\"><label>Production Nbr.</label><span style=\"color:var(--blue);font-weight:700\">"+r.prod_nbr+"</span></div>"
-     +"<div class=\"ii\"><label>Status</label><span>"+stB(r.status)+"</span></div>"
-     +"<div class=\"ii\"><label>End Date</label><span>"+r.ef+"</span></div><div class=\"ii\"></div>"
-     +"<div class=\"ii\" style=\"grid-column:span 2\"><label>Customer</label><span style=\"font-size:12px\">"+(r.customer||"-")+"</span></div>"
-     +"<div class=\"ii\" style=\"grid-column:span 2\"><label>Order Description</label><span style=\"font-size:12px\">"+r.prod_desc+"</span></div>"
+    ?"<div class=\"ii\"><label>Production Nbr.</label><span style=\"color:var(--blue);font-weight:700\">"+r.prod_nbr+"</span></div><div class=\"ii\"><label>Status</label><span>"+stB(r.status)+"</span></div><div class=\"ii\"><label>End Date</label><span>"+r.ef+"</span></div><div class=\"ii\"></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Customer</label><span style=\"font-size:12px\">"+(r.customer||"-")+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Order Description</label><span style=\"font-size:12px\">"+r.prod_desc+"</span></div>"
     :"<div class=\"ii\" style=\"grid-column:span 2\"><label>Production</label><span style=\"color:var(--orange)\">ยังไม่มีใน Production Order</span></div>";
-  document.getElementById("mBd").innerHTML=
-    "<div class=\"ig\">"
-    +"<div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div>"
-    +"<div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div>"
-    +"<div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"
-    +ph+"</div>"
-    +"<div class=\"dvd\"></div>"
-    +"<div class=\"ops-ttl\">Operations ที่ยังไม่กรอกเวลา ("+r.ops.length+" รายการ)</div>"
-    +"<table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th></tr></thead>"
-    +"<tbody>"+ops+"</tbody></table>";
+  document.getElementById("mBd").innerHTML="<div class=\"ig\"><div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div><div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"+ph+"</div><div class=\"dvd\"></div><div class=\"ops-ttl\">Operations ที่ยังไม่กรอกเวลา ("+r.ops.length+" รายการ)</div><table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th></tr></thead><tbody>"+ops+"</tbody></table>";
   document.getElementById("mbg").classList.add("open");
 }
 function closeMod(e){if(!e||e.target===document.getElementById("mbg"))document.getElementById("mbg").classList.remove("open");}
