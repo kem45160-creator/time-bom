@@ -353,16 +353,27 @@ async function analyze(){
     });
 
     var EXCL=["OS","QA"];
-    var bomFilt=bomRaw.filter(function(r){
-      return EXCL.indexOf(String(r[BC.wc]||"").trim())<0 && isZeroTime(r[BC.tm]);
-    });
-    if(!bomFilt.length)throw new Error("BOM: ไม่พบ row ที่ Machine Time = 0:00 (ยกเว้น OS/QA)");
 
-    var byInv={};
-    bomFilt.forEach(function(r){
+    // pass 1: หา Inventory ID ที่มี op ไม่มีเวลา (ยกเว้น OS/QA)
+    var noTimeInvs={};
+    bomRaw.forEach(function(r){
+      var wc=String(r[BC.wc]||"").trim();
+      if(EXCL.indexOf(wc)>=0)return;
       var inv=String(r[BC.inv]||"").trim();if(!inv||inv==="undefined")return;
+      if(isZeroTime(r[BC.tm]))noTimeInvs[inv]=true;
+    });
+    if(!Object.keys(noTimeInvs).length)throw new Error("BOM: ไม่พบ row ที่ Machine Time = 0:00 (ยกเว้น OS/QA)");
+
+    // pass 2: เก็บ ops ทั้งหมด (ยกเว้น OS/QA) ของ inv ที่มีปัญหา + flag noTime
+    var byInv={};
+    bomRaw.forEach(function(r){
+      var wc=String(r[BC.wc]||"").trim();
+      if(EXCL.indexOf(wc)>=0)return;
+      var inv=String(r[BC.inv]||"").trim();if(!inv||inv==="undefined")return;
+      if(!noTimeInvs[inv])return;
       if(!byInv[inv])byInv[inv]={bid:String(r[BC.id]||"").trim(),bdesc:String(r[BC.desc]||"").trim(),ops:[]};
-      byInv[inv].ops.push({op:String(r[BC.op]||"").trim(),wc:String(r[BC.wc]||"").trim(),desc:String(r[BC.od]||"").trim()});
+      var tm=String(r[BC.tm]||"").trim();
+      byInv[inv].ops.push({op:String(r[BC.op]||"").trim(),wc:wc,desc:String(r[BC.od]||"").trim(),time:tm,noTime:isZeroTime(r[BC.tm])});
     });
 
     var prodIdx={};
@@ -504,12 +515,19 @@ function renderPager(){
 function gp(n){curPage=n;render();window.scrollTo(0,0);}
 function showDet(idx){
   var r=ROWS[idx];if(!r)return;
-  var ops=r.ops.map(function(o){return"<tr><td>"+o.op+"</td><td><span class=\"wc\">"+o.wc+"</span></td><td>"+o.desc+"</td></tr>";}).join("");
+  var noTimeCnt=r.ops.filter(function(o){return o.noTime;}).length;
+  var ops=r.ops.map(function(o){
+    var timeTd=o.noTime
+      ?"<td style=\"color:var(--red);font-weight:700\">&#9888; ยังไม่กรอก</td>"
+      :"<td style=\"color:var(--green)\">"+o.time+"</td>";
+    var rowStyle=o.noTime?"style=\"background:#fff5f5\"":" ";
+    return"<tr "+rowStyle+"><td>"+o.op+"</td><td><span class=\"wc\">"+o.wc+"</span></td><td>"+o.desc+"</td>"+timeTd+"</tr>";
+  }).join("");
   document.getElementById("mTtl").textContent=r.inv_id+" - "+r.bom_id;
   var ph=r.matched
     ?"<div class=\"ii\"><label>Production Nbr.</label><span style=\"color:var(--blue);font-weight:700\">"+r.prod_nbr+"</span></div><div class=\"ii\"><label>Status</label><span>"+stB(r.status)+"</span></div><div class=\"ii\"><label>End Date</label><span>"+r.ef+"</span></div><div class=\"ii\"><label>Qty. to Produce</label><span style=\"font-weight:700;color:var(--navy)\">"+( r.qty||"-")+" EA</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Customer</label><span style=\"font-size:12px\">"+(r.customer||"-")+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Order Description</label><span style=\"font-size:12px\">"+r.prod_desc+"</span></div>"
     :"<div class=\"ii\" style=\"grid-column:span 2\"><label>Production</label><span style=\"color:var(--orange)\">ยังไม่มีใน Production Order</span></div>";
-  document.getElementById("mBd").innerHTML="<div class=\"ig\"><div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div><div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"+ph+"</div><div class=\"dvd\"></div><div class=\"ops-ttl\">Operations ที่ยังไม่กรอกเวลา ("+r.ops.length+" รายการ)</div><table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th></tr></thead><tbody>"+ops+"</tbody></table>";
+  document.getElementById("mBd").innerHTML="<div class=\"ig\"><div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div><div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"+ph+"</div><div class=\"dvd\"></div><div class=\"ops-ttl\">Operations ทั้งหมด ("+r.ops.length+" รายการ &mdash; ไม่มีเวลา <span style=\"color:var(--red)\">"+noTimeCnt+" รายการ</span>)</div><table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th><th>Machine Time</th></tr></thead><tbody>"+ops+"</tbody></table>";
   document.getElementById("mbg").classList.add("open");
 }
 function closeMod(e){if(!e||e.target===document.getElementById("mbg"))document.getElementById("mbg").classList.remove("open");}
