@@ -92,18 +92,6 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
 .spin{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:sp .7s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 .ov p{font-size:14px;color:var(--muted)}
-
-.uslot-img{position:relative;display:flex;align-items:center;gap:8px;padding:8px 14px;border:1.5px dashed var(--border);border-radius:7px;transition:.15s;flex:1;min-width:200px;max-width:340px}
-.uslot-img:hover{border-color:var(--blue);background:#f0f8ff}
-.uslot-img.ok{border-style:solid;border-color:var(--green);background:#f0fdf4}
-.uslot-img input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:2}
-.uslot-img.dragover{border-color:var(--blue);background:#e8f4ff}
-.img-badge{display:inline-block;background:#dbeafe;color:#1d4ed8;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;cursor:pointer}
-.img-badge:hover{background:#bfdbfe}
-.modal-img{width:100%;max-height:300px;object-fit:contain;border:1px solid var(--border);border-radius:6px;margin-bottom:14px;background:#f8fafc}
-.img-placeholder{width:100%;height:180px;display:flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid var(--border);border-radius:6px;margin-bottom:14px;color:var(--muted);font-size:13px}
-.img-count-badge{background:#f0fdf4;color:var(--green);border:1px solid #86efac;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600}
-
 .toast{display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:14px 22px;border-radius:8px;font-size:13px;z-index:600;max-width:88vw;text-align:center;white-space:pre-line;box-shadow:0 4px 20px rgba(0,0,0,.3);line-height:1.6}
 .toast.open{display:block}
 </style>
@@ -118,10 +106,7 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
       <p>SAHA Autopart Industry &middot; ตัด OS/QA &middot; จับคู่ Inventory ID</p>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:8px">
-      <span class="hd-badge" id="imgBadge" style="display:none">&#128247; <span id="imgCount">0</span> รูป</span>
-      <div class="hd-badge" id="badge">&#9888; ยังไม่ได้โหลดไฟล์</div>
-    </div>
+  <div class="hd-badge" id="badge">&#9888; ยังไม่ได้โหลดไฟล์</div>
 </div>
 
 <div class="upload-bar">
@@ -139,14 +124,6 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
     <div class="uslot-info">
       <div class="uslot-title">Production Order File</div>
       <div class="uslot-sub" id="sb2">คลิกหรือลากไฟล์ Production .xlsx</div>
-    </div>
-  </div>
-  <div class="uslot-img" id="slImg" ondragover="dovImg(event)" ondragleave="dolImg()" ondrop="ddrImg(event)">
-    <input type="file" id="fiImg" webkitdirectory multiple accept="image/*" onchange="onImgFolder(this)">
-    <span class="uslot-icon" style="z-index:1;pointer-events:none">&#128247;</span>
-    <div class="uslot-info" style="z-index:1;pointer-events:none">
-      <div class="uslot-title">โฟลเดอร์รูปภาพ</div>
-      <div class="uslot-sub" id="sbImg">คลิกหรือลากโฟลเดอร์รูป</div>
     </div>
   </div>
   <button class="btn-go" id="btnGo" disabled onclick="analyze()">&#128269; วิเคราะห์</button>
@@ -192,8 +169,6 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
   <table>
     <thead id="th1"><tr>
       <th style="width:36px">#</th>
-      <th style="width:32px">รูป</th>
-      <th style="width:32px">รูป</th>
       <th onclick="srt('inv_id')">Inventory ID <span class="si">&#8597;</span></th>
       <th onclick="srt('bom_id')">BOM ID <span class="si">&#8597;</span></th>
       <th>BOM Description</th>
@@ -235,80 +210,6 @@ var SEED_PREFIXES=["FGPDAU", "FGPDGL", "SMPDGL", "SVGLTM"];
 
 var ROWS=[],filtered=[],curTab=1,sortKey="",sortDir=1,curPage=1,PG=30;
 var fBom=null,fProd=null;
-var IMGS={};  // key = inv_id (uppercase, no ext) -> ObjectURL
-
-// ─── โฟลเดอร์รูปภาพ ───
-function dovImg(e){e.preventDefault();document.getElementById('slImg').classList.add('dragover');}
-function dolImg(){document.getElementById('slImg').classList.remove('dragover');}
-function ddrImg(e){
-  e.preventDefault();dolImg();
-  var items=e.dataTransfer.items;
-  if(!items)return;
-  var files=[];
-  var pending=0;
-  function readEntry(entry){
-    if(entry.isFile){
-      pending++;
-      entry.file(function(f){
-        processImgFile(f);
-        pending--;
-        if(pending===0)finishImgLoad(files.length);
-      });
-    }else if(entry.isDirectory){
-      var reader=entry.createReader();
-      pending++;
-      reader.readEntries(function(entries){
-        pending--;
-        entries.forEach(function(en){readEntry(en);});
-        if(pending===0)finishImgLoad();
-      });
-    }
-  }
-  for(var i=0;i<items.length;i++){
-    var entry=items[i].webkitGetAsEntry();
-    if(entry)readEntry(entry);
-  }
-}
-function processImgFile(f){
-  var name=f.name.replace(/\.[^.]+$/,'').toUpperCase().trim();
-  if(!name)return;
-  if(IMGS[name])URL.revokeObjectURL(IMGS[name]);
-  IMGS[name]=URL.createObjectURL(f);
-}
-function onImgFolder(inp){
-  var files=inp.files;if(!files||!files.length)return;
-  var cnt=0;
-  for(var i=0;i<files.length;i++){
-    var f=files[i];
-    if(!f.type.startsWith('image/'))continue;
-    processImgFile(f);cnt++;
-  }
-  finishImgLoad(cnt);
-}
-function finishImgLoad(cnt){
-  var n=Object.keys(IMGS).length;
-  document.getElementById('slImg').classList.add('ok');
-  document.getElementById('sbImg').textContent=n+' รูป โหลดแล้ว';
-  document.getElementById('imgBadge').style.display='';
-  document.getElementById('imgCount').textContent=n;
-  if(ROWS.length)render();
-}
-function hasImg(inv_id){return !!IMGS[(inv_id||'').toUpperCase().trim()];}
-function imgThumb(inv_id){
-  var url=IMGS[(inv_id||'').toUpperCase().trim()];
-  if(!url)return '';
-  return '<span class="img-badge" onclick="event.stopPropagation();showImgModal(''+inv_id+'')" title="ดูรูป">&#128247;</span>';
-}
-function showImgModal(inv_id){
-  var url=IMGS[(inv_id||'').toUpperCase().trim()];
-  if(!url)return;
-  var m=document.getElementById('mbg');
-  var ttl=document.getElementById('mTtl');
-  var bd=document.getElementById('mBd');
-  ttl.textContent='รูปภาพ: '+inv_id;
-  bd.innerHTML='<img src="'+url+'" class="modal-img" alt="'+inv_id+'">';
-  m.classList.add('open');
-}
 
 // ─── fix sheet ที่มี lowercase cell keys และ !ref ผิดรูปแบบ ───
 // สาเหตุ: Production Order file export จาก Acumatica มี cell ref เป็น lowercase
@@ -408,13 +309,6 @@ function onFile(inp,slId,fiId){
 }
 function doReset(){
   fBom=null;fProd=null;ROWS=[];
-  Object.values(IMGS).forEach(function(u){URL.revokeObjectURL(u);});
-  IMGS={};
-  document.getElementById('slImg').classList.remove('ok');
-  document.getElementById('sbImg').textContent='คลิกหรือลากโฟลเดอร์รูป';
-  document.getElementById('fiImg').value='';
-  document.getElementById('imgBadge').style.display='none';
-  document.getElementById('imgCount').textContent='0';
   ["sl1","sl2"].forEach(function(id){document.getElementById(id).classList.remove("ok");});
   document.getElementById("sb1").textContent="คลิกหรือลากไฟล์ BOM .xlsx";
   document.getElementById("sb2").textContent="คลิกหรือลากไฟล์ Production .xlsx";
@@ -606,7 +500,7 @@ function render(){
   var s=(curPage-1)*PG,page=filtered.slice(s,s+PG),tb=document.getElementById("tbody"),cols=curTab===1?9:8;
   if(!page.length){tb.innerHTML="<tr><td colspan=\""+cols+"\" class=\"no-data\">ไม่พบข้อมูล</td></tr>";document.getElementById("pager").innerHTML="";return;}
   var h="";
-  if(curTab===1){page.forEach(function(r,i){h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"+"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"+"<td>"+imgThumb(r.inv_id)+"</td>"+"<td>"+imgThumb(r.inv_id)+"</td>"+"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"+"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"+"<td style=\"font-weight:600;font-size:12px;white-space:nowrap\">"+r.prod_nbr+"</td>"+"<td>"+stB(r.status)+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.ef+"</td>"+"<td style=\"font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\""+r.customer+"\">"+(r.customer||"-")+"</td>"+"<td>"+wcc(r.wcs)+"</td>"+"</tr>";});}
+  if(curTab===1){page.forEach(function(r,i){h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"+"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"+"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"+"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"+"<td style=\"font-weight:600;font-size:12px;white-space:nowrap\">"+r.prod_nbr+"</td>"+"<td>"+stB(r.status)+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.ef+"</td>"+"<td style=\"font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\" title=\""+r.customer+"\">"+(r.customer||"-")+"</td>"+"<td>"+wcc(r.wcs)+"</td>"+"</tr>";});}
   else{page.forEach(function(r,i){h+="<tr onclick=\"showDet("+ROWS.indexOf(r)+")\">"+"<td style=\"color:var(--light);font-size:11px\">"+(s+i+1)+"</td>"+"<td style=\"font-weight:700;color:var(--blue);white-space:nowrap;font-size:12px\">"+r.inv_id+"</td>"+"<td style=\"font-size:12px;white-space:nowrap\">"+r.bom_id+"</td>"+"<td style=\"max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px\" title=\""+r.bom_desc+"\">"+r.bom_desc+"</td>"+"<td>"+wcc(r.wcs)+"</td>"+"<td>"+(r.matched?"<span class=\"badge b-red\">มีใน Production</span>":"<span class=\"badge b-gray\">ยังไม่มี</span>")+"</td>"+"<td style=\"font-size:12px\">"+(r.prod_nbr||"-")+"</td>"+"<td>"+stB(r.status)+"</td>"+"</tr>";});}
   tb.innerHTML=h;renderPager();
 }
@@ -633,11 +527,7 @@ function showDet(idx){
   var ph=r.matched
     ?"<div class=\"ii\"><label>Production Nbr.</label><span style=\"color:var(--blue);font-weight:700\">"+r.prod_nbr+"</span></div><div class=\"ii\"><label>Status</label><span>"+stB(r.status)+"</span></div><div class=\"ii\"><label>End Date</label><span>"+r.ef+"</span></div><div class=\"ii\"><label>Qty. to Produce</label><span style=\"font-weight:700;color:var(--navy)\">"+( r.qty||"-")+" EA</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Customer</label><span style=\"font-size:12px\">"+(r.customer||"-")+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>Order Description</label><span style=\"font-size:12px\">"+r.prod_desc+"</span></div>"
     :"<div class=\"ii\" style=\"grid-column:span 2\"><label>Production</label><span style=\"color:var(--orange)\">ยังไม่มีใน Production Order</span></div>";
-  var imgHtml='';
-  var imgUrl=IMGS[(r.inv_id||'').toUpperCase().trim()];
-  if(imgUrl){imgHtml='<img src="'+imgUrl+'" class="modal-img" alt="'+r.inv_id+'">';}
-  else{imgHtml='<div class="img-placeholder">&#128247; ไม่มีรูป '+r.inv_id+'</div>';}
-  document.getElementById("mBd").innerHTML=imgHtml+"<div class=\"ig\">"<div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div><div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"+ph+"</div><div class=\"dvd\"></div><div class=\"ops-ttl\">Operations ทั้งหมด ("+r.ops.length+" รายการ &mdash; ไม่มีเวลา <span style=\"color:var(--red)\">"+noTimeCnt+" รายการ</span>)</div><table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th><th>Machine Time</th></tr></thead><tbody>"+ops+"</tbody></table>";
+  document.getElementById("mBd").innerHTML="<div class=\"ig\"><div class=\"ii\"><label>Inventory ID</label><span>"+r.inv_id+"</span></div><div class=\"ii\"><label>BOM ID</label><span>"+r.bom_id+"</span></div><div class=\"ii\" style=\"grid-column:span 2\"><label>BOM Description</label><span>"+r.bom_desc+"</span></div>"+ph+"</div><div class=\"dvd\"></div><div class=\"ops-ttl\">Operations ทั้งหมด ("+r.ops.length+" รายการ &mdash; ไม่มีเวลา <span style=\"color:var(--red)\">"+noTimeCnt+" รายการ</span>)</div><table class=\"otbl\"><thead><tr><th>Op</th><th>Work Center</th><th>Description</th><th>Machine Time</th></tr></thead><tbody>"+ops+"</tbody></table>";
   document.getElementById("mbg").classList.add("open");
 }
 function closeMod(e){if(!e||e.target===document.getElementById("mbg"))document.getElementById("mbg").classList.remove("open");}
