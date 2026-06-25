@@ -461,6 +461,25 @@ function onFile(inp,slId,fiId){
   document.getElementById(slId).classList.add("ok");
   document.getElementById(fiId==="fi1"?"sb1":fiId==="fi2"?"sb2":"sb3").textContent=f.name;
   document.getElementById("btnGo").disabled=!(fBom&&fProd);
+  // receiver mode: ลากไฟล์รูปตรง slot3 -> โหลดทันทีโดยไม่ต้อง analyze()
+  if(GIST_MODE==="receiver"&&fiId==="fi3"&&fPic){
+    loadPicOnly(fPic);
+  }
+}
+
+async function loadPicOnly(file){
+  var ov=document.getElementById("ov");
+  document.getElementById("ovMsg").textContent="กำลังอ่านไฟล์รูปภาพ...";
+  ov.classList.add("open");
+  try{
+    IMG_MAP=await readPicXLSX(file);
+    var n=Object.keys(IMG_MAP).length;
+    showToast("✅ โหลดรูปภาพแล้ว "+n+" รายการ",5000);
+    document.getElementById("sb3").textContent=file.name+" ("+n+" รูป)";
+  }catch(err){
+    showToast("⚠️ อ่านไฟล์รูปไม่สำเร็จ: "+err.message,7000);
+  }
+  ov.classList.remove("open");
 }
 function doReset(){
   fBom=null;fProd=null;fPic=null;
