@@ -99,6 +99,11 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
 .ov p{font-size:14px;color:var(--muted)}
 .toast{display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:14px 22px;border-radius:8px;font-size:13px;z-index:600;max-width:88vw;text-align:center;white-space:pre-line;box-shadow:0 4px 20px rgba(0,0,0,.3);line-height:1.6}
 .toast.open{display:block}
+.receiver-hint{display:none;font-size:11px;color:var(--blue);padding:6px 24px 0;background:var(--white)}
+body.mode-receiver .receiver-hint{display:block}
+body.mode-receiver #sl1,body.mode-receiver #sl2{opacity:.35;pointer-events:none}
+body.mode-receiver #btnGo{display:none}
+body.mode-receiver #sl3{border-color:var(--blue);background:#f0f8ff}
 .gist-panel{background:var(--white);border-bottom:2px solid var(--blue);padding:10px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .gist-panel input{padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-family:"Noto Sans Thai",sans-serif;font-size:12px;color:var(--navy);outline:none}
 .gist-panel input:focus{border-color:var(--blue)}
@@ -134,6 +139,9 @@ td{padding:9px 12px;font-size:13px;color:var(--navy);vertical-align:middle}
   <span id="gistStatus" class="gist-status">ปิดอยู่</span>
 </div>
 
+<div class="receiver-hint" id="receiverHint">
+  📺 <b>เครื่อง Y:</b> ข้อมูล BOM/Production มาจาก Gist อัตโนมัติ — ลาก <b>Picture File</b> ด้านขวาเพื่อดูรูปภาพได้เลย
+</div>
 <div class="upload-bar">
   <div class="uslot" id="sl1" ondragover="dov(event,'sl1')" ondragleave="dol('sl1')" ondrop="ddr(event,'sl1','fi1')">
     <input type="file" id="fi1" accept=".xlsx,.xls" onchange="onFile(this,'sl1','fi1')">
@@ -455,7 +463,10 @@ function onFile(inp,slId,fiId){
   document.getElementById("btnGo").disabled=!(fBom&&fProd);
 }
 function doReset(){
-  fBom=null;fProd=null;fPic=null;IMG_MAP={};ROWS=[];
+  fBom=null;fProd=null;fPic=null;
+  // receiver mode: เก็บ IMG_MAP ไว้ (โหลดจาก Picture.xlsx บนเครื่องนี้)
+  if(GIST_MODE!=="receiver")IMG_MAP={};
+  ROWS=[];
   ["sl1","sl2","sl3"].forEach(function(id){document.getElementById(id).classList.remove("ok");});
   document.getElementById("sb1").textContent="คลิกหรือลากไฟล์ BOM .xlsx";
   document.getElementById("sb2").textContent="คลิกหรือลากไฟล์ Production .xlsx";
@@ -705,10 +716,12 @@ function onModeChange(){
   if(GIST_TIMER){clearInterval(GIST_TIMER);GIST_TIMER=null;}
   saveConfig();
   var st=document.getElementById("gistStatus");
+  document.body.classList.remove("mode-receiver");
   if(GIST_MODE==="off"){st.className="gist-status";st.textContent="ปิดอยู่";}
   else if(GIST_MODE==="sender"){st.className="gist-status";st.textContent="🖥 โหมดส่ง — โหลดไฟล์แล้ววิเคราะห์เพื่ออัปโหลด";}
   else if(GIST_MODE==="receiver"){
     st.className="gist-status";st.textContent="📺 รอรับข้อมูล...";
+    document.body.classList.add("mode-receiver");
     GIST_TIMER=setInterval(pollGist,30000);
     pollGist();
   }
@@ -719,10 +732,24 @@ async function pushGist(){
   var id=(document.getElementById("gistId").value||"").trim();
   var tok=(document.getElementById("gistToken").value||"").trim();
   if(!id||!tok){showToast("⚠️ กรุณากรอก Gist ID และ GitHub Token",5000);return;}
-  var payload={ts:Date.now(),rows:ROWS};
-  var body=JSON.stringify({files:{"delivery_data.json":{content:JSON.stringify(payload)}}});
   var st=document.getElementById("gistStatus");
-  st.className="gist-status";st.textContent="☁️ กำลังอัปโหลด...";
+  st.className="gist-status";st.textContent="☁️ กำลังอัปโหลดข้อมูล...";
+  // แยก rows และ IMG_MAP เป็น 2 ไฟล์ใน Gist เดียวกัน
+  var dataPayload={ts:Date.now(),rows:ROWS};
+  var files={"delivery_data.json":{content:JSON.stringify(dataPayload)}};
+  // รูปภาพ: แบ่งเป็น chunks เพื่อหลีกเลี่ยง Gist 1MB limit
+  var imgKeys=Object.keys(IMG_MAP);
+  if(imgKeys.length>0){
+    // chunk ทีละ 20 รูปต่อไฟล์
+    var CHUNK=20;
+    for(var ci=0;ci*CHUNK<imgKeys.length;ci++){
+      var chunk={};
+      imgKeys.slice(ci*CHUNK,(ci+1)*CHUNK).forEach(function(k){chunk[k]=IMG_MAP[k];});
+      files["delivery_img_"+ci+".json"]={content:JSON.stringify(chunk)};
+    }
+    files["delivery_img_meta.json"]={content:JSON.stringify({chunks:Math.ceil(imgKeys.length/CHUNK),ts:Date.now()})};
+  }
+  var body=JSON.stringify({files:files});
   try{
     var res=await fetch("https://api.github.com/gists/"+id,{
       method:"PATCH",
@@ -730,7 +757,8 @@ async function pushGist(){
       body:body
     });
     if(res.ok){
-      st.className="gist-status ok";st.textContent="☁️ ส่ง Gist แล้ว "+new Date().toLocaleTimeString("th-TH");
+      var imgInfo=imgKeys.length>0?" + "+imgKeys.length+" รูป":"";
+      st.className="gist-status ok";st.textContent="☁️ ส่งแล้ว"+imgInfo+" | "+new Date().toLocaleTimeString("th-TH");
     }else{
       var err=await res.json().catch(function(){return{};});
       st.className="gist-status err";st.textContent="❌ HTTP "+res.status+(err.message?" — "+err.message:"");
@@ -764,7 +792,10 @@ async function pollGist(){
     buildOpts();updCards();enF();
     document.getElementById("badge").className="hd-badge ok";
     document.getElementById("badge").textContent="Gist sync "+new Date().toLocaleTimeString("th-TH");
-    st.className="gist-status ok";st.textContent="✅ รับข้อมูลแล้ว "+new Date().toLocaleTimeString("th-TH");
+    // รูปภาพ: เครื่อง Y โหลด Picture.xlsx เองได้เลย (IMG_MAP ไม่ถูกล้าง)
+    var imgCount=Object.keys(IMG_MAP).length;
+    var imgNote=imgCount>0?" + รูป "+imgCount+" รายการ":" (ยังไม่มีรูป — ลาก Picture.xlsx ได้เลย)";
+    st.className="gist-status ok";st.textContent="✅ รับแล้ว "+ROWS.length+" แถว"+imgNote+" | "+new Date().toLocaleTimeString("th-TH");
     applyF();
   }catch(ex){
     st.className="gist-status err";st.textContent="❌ "+ex.message;
